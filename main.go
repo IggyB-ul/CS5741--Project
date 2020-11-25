@@ -14,57 +14,57 @@ import (
 // - Implement the busy hours.
 // - Implement weather
 // - Implement time of the day so that it can be printed what is the "Real time".
-// - Fix deadlocks
 // - Implement all counters, as total items processed, etc.
 // - Make output as much information as possible
 // - Comment code more so that others can understand (only when the full code is finished)
 
-
 type store struct {
-	storeId          int
-	checkouts        map[string]checkout
-	busyRanges		 map[string]busyRange
-	weather	 		 optionFactor
-	openingHours	 string
-	totalCustomers 	 int
-	customers		 map[string]customer
+	storeId            int
+	checkouts          map[string]checkout
+	busyRanges         map[string]busyRange
+	weather            optionFactor
+	openingHours       string
+	totalCustomers     int
+	customers          map[string]customer
 	processedCustomers int
-	hasFloorManager	  bool
+	hasFloorManager    bool
 }
 
 type busyRange struct {
-	fromHour int
-	toHour	 int
+	fromHour         int
+	toHour           int
 	busyOptionFactor optionFactor
 }
 
 type checkout struct {
-	checkoutId          int
-	cashierEfficiency   float64
-	maxItems			int
+	checkoutId           int
+	cashierEfficiency    float64
+	maxItems             int
 	checkoutDesirability int
-	currentDeep		    int
-	status				string
+	currentDeep          int
+	status               string
 	totalCustomersServed int
 	totalItemsCheckedOut int
 }
 
 func (c checkout) scanProduct(product product) {
 	productProcessTime := gClock.convertFromSeconds(product.processTimeSecond)
-	time.Sleep(time.Duration(int(productProcessTime * c.cashierEfficiency * 1000)))
+	timeToProcess := time.Duration(productProcessTime*c.cashierEfficiency) * time.Second
+	time.Sleep(timeToProcess)
+	fmt.Println("Scanning: " + strconv.Itoa(product.productId))
 }
 
 type customer struct {
-	customerId       int
-	items            int
-	checkoutId       int
-	queueTimeSeconds        int
-	maxQueueTimeSeconds     int
-	maxQueueCustomers int
-	purchaseComplete bool
-	leftQueue        bool
-	checkoutTime     float32
-	products		 map[string]product
+	customerId          int
+	items               int
+	checkoutId          int
+	queueTimeSeconds    int
+	maxQueueTimeSeconds int
+	maxQueueCustomers   int
+	purchaseComplete    bool
+	leftQueue           bool
+	checkoutTime        float32
+	products            map[string]product
 }
 
 type clock struct {
@@ -76,7 +76,7 @@ func (c clock) convertFromSeconds(seconds int) float64 {
 }
 
 type optionFactor struct {
-	name string
+	name   string
 	factor float32
 }
 
@@ -93,16 +93,16 @@ var busyRangeOptions = map[string]optionFactor{
 }
 
 type product struct {
-	productId int
+	productId         int
 	processTimeSecond int
 }
 
-func readFromConsole (label string, convertToUpper bool, defaultValue string, useDefaultSettings bool) string {
+func readFromConsole(label string, convertToUpper bool, defaultValue string, useDefaultSettings bool) string {
 
-	fmt.Print( label + "\n")
+	fmt.Print(label + "\n")
 
 	if useDefaultSettings {
-		fmt.Print( defaultValue + "\n")
+		fmt.Print(defaultValue + "\n")
 		return defaultValue
 	}
 
@@ -117,22 +117,23 @@ func readFromConsole (label string, convertToUpper bool, defaultValue string, us
 		text = defaultValue
 	}
 
-	fmt.Print( text + "\n")
+	fmt.Print(text + "\n")
 	return text
 }
 
 func generateRandomNumber(min int, max int) int {
 	rand.Seed(time.Now().UnixNano())
-	return rand.Intn(max - min + 1) + min
+	return rand.Intn(max-min+1) + min
 }
 
-func openCheckout(checkoutName string, checkout checkout){
+func openCheckout(store store, checkoutName string, checkout checkout) {
 
 	fmt.Println("Opening: " + checkoutName)
 
 	for {
-		customer := <-queue
-		time.Sleep(10 * time.Second)
+		queueIndex := getQueueIndex(store, checkout)
+		customer := <-queues[queueIndex]
+		fmt.Println("Customer: " + strconv.Itoa(customer.customerId) + ", Arrived at checkout: " + strconv.Itoa(checkout.checkoutId))
 		for _, eProduct := range customer.products {
 			checkout.scanProduct(eProduct)
 		}
@@ -140,18 +141,43 @@ func openCheckout(checkoutName string, checkout checkout){
 
 }
 
-var done = make(chan bool)
-var queue = make(chan customer)
+var queues = make(map[string]chan customer)
+
+//
+//var done = make(chan bool)
+//var done map[string]chan bool
+
+//var queue = make(chan customer)
 var gClock clock
 
 func customerSpawning(eStore store) {
 
+	i := 0
+
 	for _, eCustomer := range eStore.customers {
-		time.Sleep(10 * time.Millisecond)
-		queue <- eCustomer
+		rangeEnds := len(eStore.checkouts) - 1
+		queueIndex := getQueueIndex(eStore, eStore.checkouts["checkout"+strconv.Itoa(generateRandomNumber(0, rangeEnds))])
+		if eStore.hasFloorManager {
+			queues[queueIndex] <- eCustomer
+		} else {
+			queues[queueIndex] <- eCustomer
+		}
+		i++
 	}
 
-	done <- true
+	// Close queues after finishing.
+	if len(eStore.customers)-1 == i {
+		for _, eCheckout := range eStore.checkouts {
+			queueIndex := getQueueIndex(eStore, eCheckout)
+			close(queues[queueIndex])
+		}
+	}
+
+	//done <- true
+}
+
+func getQueueIndex(eStore store, eCheckout checkout) string {
+	return "store_" + strconv.Itoa(eStore.storeId) + "_checkout_" + strconv.Itoa(eCheckout.checkoutId)
 }
 
 func main() {
@@ -198,7 +224,7 @@ func main() {
 
 		//// Opening Hours
 		openingHours := readFromConsole(
-			"[Store " + strconv.Itoa(iStore) + "] Enter opening hours from-to, [8-20]:",
+			"[Store "+strconv.Itoa(iStore)+"] Enter opening hours from-to, [8-20]:",
 			true,
 			"8-20",
 			useDefaultSettings)
@@ -211,15 +237,15 @@ func main() {
 
 		for iBusyRange := openingHoursFrom; iBusyRange <= openingHoursTo; iBusyRange++ {
 			lastStringReader := readFromConsole(
-				"[Store " + strconv.Itoa(iStore) + "] How busy will this store be at: ["+strconv.Itoa(iBusyRange)+":00]",
+				"[Store "+strconv.Itoa(iStore)+"] How busy will this store be at: ["+strconv.Itoa(iBusyRange)+":00]",
 				true,
 				"lb",
 				useDefaultSettings)
 			selectedBusyRange := busyRangeOptions[lastStringReader]
 
-			busyRanges["busyRange_" + strconv.Itoa(iBusyRange)] = busyRange{
+			busyRanges["busyRange_"+strconv.Itoa(iBusyRange)] = busyRange{
 				fromHour:         iBusyRange,
-				toHour:           iBusyRange+1,
+				toHour:           iBusyRange + 1,
 				busyOptionFactor: selectedBusyRange,
 			}
 		}
@@ -234,7 +260,7 @@ func main() {
 		weather := weatherOptions[lastStringReader]
 		//// Floor manager
 		lastStringReader = readFromConsole(
-			"[Store " + strconv.Itoa(iStore) + "] Do you want to enable a Floor Manager for this store? [Y/n]:",
+			"[Store "+strconv.Itoa(iStore)+"] Do you want to enable a Floor Manager for this store? [Y/n]:",
 			true,
 			"Y",
 			useDefaultSettings)
@@ -244,21 +270,21 @@ func main() {
 		}
 		//// number of customers
 		numberOfCustomers := readFromConsole(
-			"[Store " + strconv.Itoa(iStore) + "] How many customers do you want to generate? Range response [100-200] " +
+			"[Store "+strconv.Itoa(iStore)+"] How many customers do you want to generate? Range response [100-200] "+
 				"means from 100 to 200 customers a day.",
 			true,
 			"100-200",
 			useDefaultSettings)
 		//// number of products
 		numberOfProducts := readFromConsole(
-			"[Store " + strconv.Itoa(iStore) + "] How many products do you want to generate per customer? Range " +
+			"[Store "+strconv.Itoa(iStore)+"] How many products do you want to generate per customer? Range "+
 				"response [1-50] means from 1 to 50 customers a day.",
 			true,
 			"1-50",
 			useDefaultSettings)
 		//// number of products
 		productProcessTime := readFromConsole(
-			"[Store " + strconv.Itoa(iStore) + "] How much should it take a product to be scanned? Range response in " +
+			"[Store "+strconv.Itoa(iStore)+"] How much should it take a product to be scanned? Range response in "+
 				"seconds [1-30] means from 1 second to 30 seconds per product.",
 			true,
 			"1-30",
@@ -266,7 +292,7 @@ func main() {
 
 		//// max queue time
 		maxQueueTime := readFromConsole(
-			"[Store " + strconv.Itoa(iStore) + "] How many minutes will usually a customer be in queue before giving up? " +
+			"[Store "+strconv.Itoa(iStore)+"] How many minutes will usually a customer be in queue before giving up? "+
 				"Range response in minutes [15-30] means from 15 to 30 minute a person will usually give up",
 			true,
 			"15-30",
@@ -274,8 +300,8 @@ func main() {
 
 		//// max queue customers
 		maxQueueCustomers := readFromConsole(
-			"[Store " + strconv.Itoa(iStore) + "] How deep should usually a queue be for customer to give up? " +
-				"Range response in customer numbers [10-15] means from 10 to 15 customers in queue will make a customer " +
+			"[Store "+strconv.Itoa(iStore)+"] How deep should usually a queue be for customer to give up? "+
+				"Range response in customer numbers [10-15] means from 10 to 15 customers in queue will make a customer "+
 				"to give up.",
 			true,
 			"10-15",
@@ -283,7 +309,7 @@ func main() {
 
 		//// number of checkouts
 		lastStringReader = readFromConsole(
-			"[Store " + strconv.Itoa(iStore) + "] How many checkouts will this store have? [10] ",
+			"[Store "+strconv.Itoa(iStore)+"] How many checkouts will this store have? [10] ",
 			true,
 			"10",
 			useDefaultSettings)
@@ -296,7 +322,7 @@ func main() {
 		for iCheckout := 0; iCheckout <= numberOfCheckouts; iCheckout++ {
 			//// Cashier Efficiency
 			lastStringReader = readFromConsole(
-				"[Store " + strconv.Itoa(iStore) + "][Checkout "+strconv.Itoa(iCheckout)+"] How efficient is this cashier? [1] Recommended value from 0.1 (Really Slow) to 1.9 (Really Fast) ",
+				"[Store "+strconv.Itoa(iStore)+"][Checkout "+strconv.Itoa(iCheckout)+"] How efficient is this cashier? [1] Recommended value from 0.1 (Really Slow) to 1.9 (Really Fast) ",
 				true,
 				"1",
 				useDefaultSettings)
@@ -304,7 +330,7 @@ func main() {
 			cashierEfficiency, _ := strconv.ParseFloat(lastStringReader, 64)
 			//// Max Items
 			lastStringReader = readFromConsole(
-				"[Store " + strconv.Itoa(iStore) + "][Checkout "+strconv.Itoa(iCheckout)+"] Maximum items for this checkout? 0 means unlimited [0] ",
+				"[Store "+strconv.Itoa(iStore)+"][Checkout "+strconv.Itoa(iCheckout)+"] Maximum items for this checkout? 0 means unlimited [0] ",
 				true,
 				"0",
 				useDefaultSettings)
@@ -312,7 +338,7 @@ func main() {
 			maxItems, _ := strconv.Atoi(lastStringReader)
 			//// Checkout desirability
 			lastStringReader = readFromConsole(
-				"[Store " + strconv.Itoa(iStore) + "][Checkout "+strconv.Itoa(iCheckout)+"] How desirable will be this checkout in respect to the others " +
+				"[Store "+strconv.Itoa(iStore)+"][Checkout "+strconv.Itoa(iCheckout)+"] How desirable will be this checkout in respect to the others "+
 					"based on its location? ",
 				true,
 				strconv.Itoa(iCheckout),
@@ -353,7 +379,7 @@ func main() {
 				productProcessTimeTo, _ := strconv.Atoi(productProcessTimeParts[1])
 
 				products["product"+strconv.Itoa(iProduct)] = product{
-					productId:   iProduct,
+					productId:         iProduct,
 					processTimeSecond: generateRandomNumber(productProcessTimeFrom, productProcessTimeTo),
 				}
 			}
@@ -366,22 +392,21 @@ func main() {
 
 			maxQueueTimeSeconds = generateRandomNumber(maxQueueTimeFrom, maxQueueTimeTo) * 60
 
-
 			maxQueueCustomersParts := strings.Split(maxQueueCustomers, "-")
 			maxQueueCustomersFrom, _ := strconv.Atoi(maxQueueCustomersParts[0])
 			maxQueueCustomersTo, _ := strconv.Atoi(maxQueueCustomersParts[1])
 
 			customers["customer"+strconv.Itoa(iCustomer)] = customer{
-				customerId:        iCustomer,
-				items: 			   len(products),
-				checkoutId:        0,
-				queueTimeSeconds:  0,
+				customerId:          iCustomer,
+				items:               len(products),
+				checkoutId:          0,
+				queueTimeSeconds:    0,
 				maxQueueTimeSeconds: maxQueueTimeSeconds,
-				maxQueueCustomers: generateRandomNumber(maxQueueCustomersFrom, maxQueueCustomersTo),
-				purchaseComplete:  false,
-				leftQueue:         false,
-				checkoutTime:      0,
-				products: 		   products,
+				maxQueueCustomers:   generateRandomNumber(maxQueueCustomersFrom, maxQueueCustomersTo),
+				purchaseComplete:    false,
+				leftQueue:           false,
+				checkoutTime:        0,
+				products:            products,
 			}
 		}
 
@@ -394,20 +419,22 @@ func main() {
 			totalCustomers:     generateRandomNumber(numberOfCustomersFrom, numberOfCustomersTo),
 			processedCustomers: 0,
 			hasFloorManager:    isFloorManager,
-			customers: 			customers,
+			customers:          customers,
 		}
 	}
 
 	for kStore, eStore := range stores {
 		fmt.Println(kStore)
 
-		customerSpawning(eStore)
-
 		for kCheckout, eCheckout := range eStore.checkouts {
-			go openCheckout(kCheckout, eCheckout)
+			fmt.Println(kCheckout)
+			index := getQueueIndex(eStore, eCheckout)
+			queues[index] = make(chan customer)
+			go openCheckout(eStore, kCheckout, eCheckout)
 		}
+
+		customerSpawning(eStore)
 	}
 
-	<-done
+	//<-done
 }
-
