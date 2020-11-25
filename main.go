@@ -42,6 +42,7 @@ type checkout struct {
 	checkoutId           int
 	cashierEfficiency    float64
 	maxItems             int
+	paymentTime          int
 	checkoutDesirability int
 	currentDeep          int
 	status               string
@@ -52,9 +53,24 @@ type checkout struct {
 func (c checkout) scanProduct(product product) {
 	//productProcessTime := gClock.convertFromSeconds(product.processTimeSecond)
 	// timeToProcess := time.Duration(productProcessTime*c.cashierEfficiency) * time.Second
-	timeToProcess := time.Duration(1 * time.Second)
-	time.Sleep(timeToProcess)
+	timeToScanScaledUpFloat := product.processTimeSecond * 1000 * c.cashierEfficiency
+	timeToScanScaledUpInt := int(timeToScanScaledUpFloat)
+	//timeToScan := time.Duration(timeToScanScaledUpInt) * time.Millisecond
+	timeToBagScaledUpFloat := 1.2 * product.processTimeSecond * 1000 // DOR Careful now - fix this magic number later
+	timeToBagScaledUpInt := int(timeToBagScaledUpFloat)
+	//timeToBag := time.Duration(timeToBagScaledUpInt) * time.Millisecond
+
 	fmt.Println("Checkout" + "Scanning: " + strconv.Itoa(product.productId))
+	//fmt.Printf("Product scan time          : %f\n", product.processTimeSecond)
+	fmt.Printf("Product SCAN time          : %f\n", float64(timeToScanScaledUpInt)/1000.0)
+	fmt.Printf("Checkout Cashier efficiency: %f\n", c.cashierEfficiency)
+	//time.Sleep(timeToScan)
+	gClock.scaleSleepTimeForSimulation(product.processTimeSecond * c.cashierEfficiency)
+	fmt.Println("Checkout" + "Bagging: " + strconv.Itoa(product.productId))
+	fmt.Printf("Product BAG time          : %f\n", float64(timeToBagScaledUpInt)/1000.0)
+	//time.Sleep(timeToBag)
+	gClock.scaleSleepTimeForSimulation(product.processTimeSecond * 1.2)
+	// Really we need to add more concurrency here for scanning/ bagging
 }
 
 type customer struct {
@@ -78,6 +94,26 @@ func (c clock) convertFromSeconds(seconds int) float64 {
 	return float64(seconds) / 60 / 60 * float64(c.secondsAreOneHour)
 }
 
+func (c clock) scaleSleepTimeForSimulation(seconds float64) {
+	// Work in seconds usually for easier human understanding,
+	// then call this function for any sleep times in the simulated world
+	// secondsAreOneHour REAL WORLD seconds == 60 * 60 == 3600 Simulated seconds
+	// so a sleep for 9 seconds in the simulation corresponds to
+	// 9 * secondsAreOneHour/3600 in the Real world.
+	//
+	// As we need to allow for simulating hundredths of a second, we will also need to scale up
+	// the value to avoid truncation when converting to int, and compensate for that by using
+	// microseconds or nanoseconds
+	// So.. 5.55 seconds in the simulation. secondsAreOneHour = 10
+	// 5.55 seconds = 5550000 microseconds in simulation = 5550000/3600 microseconds in real world
+	// 1541.666 recurring microseconds
+	// I think we are safe to truncate that to 1541 microseconds
+	timeToSleepScaledUpFloat := seconds * 1000000 * float64(c.secondsAreOneHour) / 3600
+	timeToScanScaledUpInt := int(timeToSleepScaledUpFloat)
+	timeToSleepInRealWorld := time.Duration(timeToScanScaledUpInt) * time.Microsecond
+	time.Sleep(timeToSleepInRealWorld)
+}
+
 type optionFactor struct {
 	name   string
 	factor float32
@@ -97,7 +133,7 @@ var busyRangeOptions = map[string]optionFactor{
 
 type product struct {
 	productId         int
-	processTimeSecond int
+	processTimeSecond float64
 }
 
 func readFromConsole(label string, convertToUpper bool, defaultValue string, useDefaultSettings bool) string {
@@ -125,7 +161,9 @@ func readFromConsole(label string, convertToUpper bool, defaultValue string, use
 }
 
 func generateRandomNumber(min int, max int) int {
-	rand.Seed(time.Now().UnixNano())
+	// moved seed to a one time only position in main
+	// Reseeding every time was 'resetting the clock' on the randomness
+	//rand.Seed(time.Now().UnixNano())
 	return rand.Intn(max-min+1) + min
 }
 
@@ -145,12 +183,6 @@ func openCheckout(store store, checkoutName string, checkout checkout) {
 }
 
 var queues = make(map[string]chan customer)
-
-//
-//var done = make(chan bool)
-//var done map[string]chan bool
-
-//var queue = make(chan customer)
 var gClock clock
 
 func customerSpawning(eStore store) {
@@ -187,7 +219,7 @@ func main() {
 
 	var lastStringReader string
 	var stores = map[string]store{}
-
+	rand.Seed(time.Now().UnixNano())
 	lastStringReader = readFromConsole(
 		"Do you want to use all defaults settings? [Y/n]:",
 		true,
@@ -288,9 +320,9 @@ func main() {
 		//// number of products
 		productProcessTime := readFromConsole(
 			"[Store "+strconv.Itoa(iStore)+"] How much should it take a product to be scanned? Range response in "+
-				"seconds [1-30] means from 1 second to 30 seconds per product.",
+				"seconds [0.5-10] means from 0.5 second to 10 seconds per product.",
 			true,
-			"1-30",
+			"0.5-10",
 			useDefaultSettings)
 
 		//// max queue time
@@ -378,12 +410,20 @@ func main() {
 			for iProduct := numberOfProductsFrom; iProduct <= numberOfProductsTo; iProduct++ {
 
 				productProcessTimeParts := strings.Split(productProcessTime, "-")
-				productProcessTimeFrom, _ := strconv.Atoi(productProcessTimeParts[0])
-				productProcessTimeTo, _ := strconv.Atoi(productProcessTimeParts[1])
+				productProcessTimeFrom, _ := strconv.ParseFloat(productProcessTimeParts[0], 64)
+				productProcessTimeTo, _ := strconv.ParseFloat(productProcessTimeParts[1], 64)
 
+				// we gave the user the example/default of 0.5 - 10s
+				// for practicality, let's only deal with tenths of second for scanning times
+				// rand only deals with ints so we need to multiply by 10, then convert to an int
+				// then divide by 10 to get tenths of a second in a sensible range for
+				// scanning groceries
+				processTimeCalc := float64(generateRandomNumber(
+					int(10*productProcessTimeFrom), int(10*productProcessTimeTo)))
+				processTimeCalc = processTimeCalc / 10.0
 				products["product"+strconv.Itoa(iProduct)] = product{
 					productId:         iProduct,
-					processTimeSecond: generateRandomNumber(productProcessTimeFrom, productProcessTimeTo),
+					processTimeSecond: processTimeCalc,
 				}
 			}
 
