@@ -17,6 +17,8 @@ import (
 // - Implement all counters, as total items processed, etc.
 // - Make output as much information as possible
 // - Comment code more so that others can understand (only when the full code is finished)
+// - Implement customer giving up because of time
+// - Implement customer giving up because of current deep.
 
 type store struct {
 	storeId            int
@@ -48,10 +50,11 @@ type checkout struct {
 }
 
 func (c checkout) scanProduct(product product) {
-	productProcessTime := gClock.convertFromSeconds(product.processTimeSecond)
-	timeToProcess := time.Duration(productProcessTime*c.cashierEfficiency) * time.Second
+	//productProcessTime := gClock.convertFromSeconds(product.processTimeSecond)
+	// timeToProcess := time.Duration(productProcessTime*c.cashierEfficiency) * time.Second
+	timeToProcess := time.Duration(1 * time.Second)
 	time.Sleep(timeToProcess)
-	fmt.Println("Scanning: " + strconv.Itoa(product.productId))
+	fmt.Println("Checkout" + "Scanning: " + strconv.Itoa(product.productId))
 }
 
 type customer struct {
@@ -156,7 +159,7 @@ func customerSpawning(eStore store) {
 
 	for _, eCustomer := range eStore.customers {
 		rangeEnds := len(eStore.checkouts) - 1
-		queueIndex := getQueueIndex(eStore, eStore.checkouts["checkout"+strconv.Itoa(generateRandomNumber(0, rangeEnds))])
+		queueIndex := getQueueIndex(eStore, eStore.checkouts["checkout"+strconv.Itoa(generateRandomNumber(1, rangeEnds))])
 		if eStore.hasFloorManager {
 			queues[queueIndex] <- eCustomer
 		} else {
@@ -220,7 +223,7 @@ func main() {
 	numberOfStores, _ := strconv.Atoi(lastStringReader)
 
 	//// Define settings by each store
-	for iStore := 0; iStore <= numberOfStores; iStore++ {
+	for iStore := 1; iStore <= numberOfStores; iStore++ {
 
 		//// Opening Hours
 		openingHours := readFromConsole(
@@ -319,7 +322,7 @@ func main() {
 		var checkouts = map[string]checkout{}
 
 		//// Define settings by each checkout
-		for iCheckout := 0; iCheckout <= numberOfCheckouts; iCheckout++ {
+		for iCheckout := 1; iCheckout <= numberOfCheckouts; iCheckout++ {
 			//// Cashier Efficiency
 			lastStringReader = readFromConsole(
 				"[Store "+strconv.Itoa(iStore)+"][Checkout "+strconv.Itoa(iCheckout)+"] How efficient is this cashier? [1] Recommended value from 0.1 (Really Slow) to 1.9 (Really Fast) ",
