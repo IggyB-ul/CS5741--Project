@@ -51,25 +51,14 @@ type checkout struct {
 }
 
 func (c checkout) scanProduct(product product) {
-	//productProcessTime := gClock.convertFromSeconds(product.processTimeSecond)
-	// timeToProcess := time.Duration(productProcessTime*c.cashierEfficiency) * time.Second
-	timeToScanScaledUpFloat := product.processTimeSecond * 1000 * c.cashierEfficiency
-	timeToScanScaledUpInt := int(timeToScanScaledUpFloat)
-	//timeToScan := time.Duration(timeToScanScaledUpInt) * time.Millisecond
-	timeToBagScaledUpFloat := 1.2 * product.processTimeSecond * 1000 // DOR Careful now - fix this magic number later
-	timeToBagScaledUpInt := int(timeToBagScaledUpFloat)
-	//timeToBag := time.Duration(timeToBagScaledUpInt) * time.Millisecond
-
-	fmt.Println("Checkout" + "Scanning: " + strconv.Itoa(product.productId))
-	//fmt.Printf("Product scan time          : %f\n", product.processTimeSecond)
-	fmt.Printf("Product SCAN time          : %f\n", float64(timeToScanScaledUpInt)/1000.0)
-	fmt.Printf("Checkout Cashier efficiency: %f\n", c.cashierEfficiency)
-	//time.Sleep(timeToScan)
+	// Scan according to product scan time and cashier efficiency
+	// Bag according to scan time scaled by an average customer bagging factor
+	fmt.Printf("Checkout%2d;SCANNING;Prod.id;%3d;SimScanTime;%3.2f;\n",
+		c.checkoutId, product.productId, product.processTimeSecond*c.cashierEfficiency)
 	gClock.scaleSleepTimeForSimulation(product.processTimeSecond * c.cashierEfficiency)
-	fmt.Println("Checkout" + "Bagging: " + strconv.Itoa(product.productId))
-	fmt.Printf("Product BAG time          : %f\n", float64(timeToBagScaledUpInt)/1000.0)
-	//time.Sleep(timeToBag)
-	gClock.scaleSleepTimeForSimulation(product.processTimeSecond * 1.2)
+	//fmt.Printf("Checkout%2d;BAGGING ;Prod.id;%3d;SimBagTime;%3.2f;\n",
+	//	c.checkoutId,product.productId, product.processTimeSecond * 1.2)
+	gClock.scaleSleepTimeForSimulation(product.processTimeSecond * 1.2) // DOR Careful now - fix this magic number later
 	// Really we need to add more concurrency here for scanning/ bagging
 }
 
@@ -168,16 +157,24 @@ func generateRandomNumber(min int, max int) int {
 }
 
 func openCheckout(store store, checkoutName string, checkout checkout) {
-
+	// DOR Careful now - fix this magic number later
+	paymentSeconds := 60
 	fmt.Println("Opening: " + checkoutName)
 
 	for {
 		queueIndex := getQueueIndex(store, checkout)
 		customer := <-queues[queueIndex]
-		fmt.Println("Customer: " + strconv.Itoa(customer.customerId) + ", Arrived at checkout: " + strconv.Itoa(checkout.checkoutId))
+		fmt.Printf("Customer %4d arrived at Checkout %2d with %3d items\n",
+			customer.customerId, checkout.checkoutId, customer.items)
+		//fmt.Println("Customer " + strconv.Itoa(customer.customerId) + ", Arrived at checkout: " + strconv.Itoa(checkout.checkoutId))
 		for _, eProduct := range customer.products {
 			checkout.scanProduct(eProduct)
 		}
+		fmt.Printf("Customer %4d is paying at Checkout %2d...\n",
+			customer.customerId, checkout.checkoutId)
+		gClock.scaleSleepTimeForSimulation(float64(paymentSeconds))
+		fmt.Printf("Customer %4d is finished at Checkout %2d.\n",
+			customer.customerId, checkout.checkoutId)
 	}
 
 }
@@ -235,7 +232,7 @@ func main() {
 	lastStringReader = readFromConsole(
 		"How many seconds in the simulation will be one hour in real life? [1] means: 1 second is 1 hour in real life.",
 		true,
-		"8-20",
+		"10",
 		useDefaultSettings)
 	oneHourIsInSeconds, _ := strconv.Atoi(lastStringReader)
 
