@@ -53,8 +53,9 @@ type checkout struct {
 func (c checkout) scanProduct(product product) {
 	// Scan according to product scan time and cashier efficiency
 	// Bag according to scan time scaled by an average customer bagging factor
-	fmt.Printf("Checkout%2d;SCANNING;Prod.id;%3d;SimScanTime;%3.2f;\n",
-		c.checkoutId, product.productId, product.processTimeSecond*c.cashierEfficiency)
+	_, simWorldCurrentTimeString := dualClock.getSimWorldCurrentTime()
+	fmt.Printf("%s:Checkout%2d;SCANNING;Prod.id;%3d;SimScanTime;%3.2f;\n",
+		simWorldCurrentTimeString, c.checkoutId, product.productId, product.processTimeSecond*c.cashierEfficiency)
 	gClock.scaleSleepTimeForSimulation(product.processTimeSecond * c.cashierEfficiency)
 	//fmt.Printf("Checkout%2d;BAGGING ;Prod.id;%3d;SimBagTime;%3.2f;\n",
 	//	c.checkoutId,product.productId, product.processTimeSecond * 1.2)
@@ -101,6 +102,47 @@ func (c clock) scaleSleepTimeForSimulation(seconds float64) {
 	timeToScanScaledUpInt := int(timeToSleepScaledUpFloat)
 	timeToSleepInRealWorld := time.Duration(timeToScanScaledUpInt) * time.Microsecond
 	time.Sleep(timeToSleepInRealWorld)
+}
+
+type dualTimeClock struct {
+	secondsAreOneHour    int
+	realWorldStartTime   int64
+	realWorldCurrentTime int64
+	simWorldDayNumber    int
+	simWorldStartTime    int64
+	simWorldCurrentTime  int64
+}
+
+func (dtc *dualTimeClock) initRealWorldStartTime() {
+	dtc.realWorldStartTime = time.Now().UnixNano() // number of nanoseconds since January 1, 1970 UTC
+}
+func (dtc *dualTimeClock) initSimWorldDayClock(storeOpenTimeHoursInt int) {
+	dtc.simWorldStartTime = 0 // it's groundhog day!
+	openingTimeInSeconds := int64(60 * 60 * storeOpenTimeHoursInt)
+	dtc.simWorldStartTime = openingTimeInSeconds // it's opening time!
+}
+func (dtc *dualTimeClock) getRealWorldCurrentTime() int64 {
+	dtc.realWorldCurrentTime = time.Now().UnixNano()
+	return dtc.realWorldCurrentTime
+}
+func (dtc *dualTimeClock) getSimWorldCurrentTime() (int64, string) {
+	// So we know that secondsAreOneHour seconds in the real world == 3600 seconds in sim world
+	// Let's assume the minimum value for secondsAreOneHour == 1
+	// secondsAreOneHour milliseconds in the real world == 3.6 seconds in sim world
+	// secondsAreOneHour microseconds in the real world == 0.0036 seconds in sim world
+	// Surely ^that's^ adequate resolution?
+	// secondsAreOneHour nanoseconds in the real world == 0.0000036 seconds in sim world
+	// 1 microsecond in the real world = (0.0036/secondsAreOneHour) seconds in sim world
+	var secondsSinceOpening float64
+	var secondsSinceStoreEpoch int64
+	//var humanReadableTimeString string
+	realWorldMicroSecondsElapsed := (time.Now().UnixNano() - dtc.realWorldStartTime) / 1000
+	scalingRealTimeToSimTime := 0.0036 / float64(dtc.secondsAreOneHour)
+	secondsSinceOpening = float64(realWorldMicroSecondsElapsed) * scalingRealTimeToSimTime
+	secondsSinceStoreEpoch = dtc.simWorldStartTime + int64(secondsSinceOpening)
+	unixTime := time.Unix(secondsSinceStoreEpoch, 0)
+	humanReadableTimeString := fmt.Sprintf("%02d:%02d:%02d", unixTime.Hour(), unixTime.Minute(), unixTime.Second())
+	return secondsSinceStoreEpoch, humanReadableTimeString
 }
 
 type optionFactor struct {
@@ -164,23 +206,27 @@ func openCheckout(store store, checkoutName string, checkout checkout) {
 	for {
 		queueIndex := getQueueIndex(store, checkout)
 		customer := <-queues[queueIndex]
-		fmt.Printf("Customer %4d arrived at Checkout %2d with %3d items\n",
-			customer.customerId, checkout.checkoutId, customer.items)
+		_, simWorldCurrentTimeString := dualClock.getSimWorldCurrentTime()
+		fmt.Printf("%s:Customer %4d arrived at Checkout %2d with %3d items\n",
+			simWorldCurrentTimeString, customer.customerId, checkout.checkoutId, customer.items)
 		//fmt.Println("Customer " + strconv.Itoa(customer.customerId) + ", Arrived at checkout: " + strconv.Itoa(checkout.checkoutId))
 		for _, eProduct := range customer.products {
 			checkout.scanProduct(eProduct)
 		}
-		fmt.Printf("Customer %4d is paying at Checkout %2d...\n",
-			customer.customerId, checkout.checkoutId)
+		_, simWorldCurrentTimeString = dualClock.getSimWorldCurrentTime()
+		fmt.Printf("%s:Customer %4d is paying at Checkout %2d...\n",
+			simWorldCurrentTimeString, customer.customerId, checkout.checkoutId)
 		gClock.scaleSleepTimeForSimulation(float64(paymentSeconds))
-		fmt.Printf("Customer %4d is finished at Checkout %2d.\n",
-			customer.customerId, checkout.checkoutId)
+		_, simWorldCurrentTimeString = dualClock.getSimWorldCurrentTime()
+		fmt.Printf("%s:Customer %4d is finished at Checkout %2d.\n",
+			simWorldCurrentTimeString, customer.customerId, checkout.checkoutId)
 	}
 
 }
 
 var queues = make(map[string]chan customer)
 var gClock clock
+var dualClock dualTimeClock
 
 func customerSpawning(eStore store) {
 
@@ -237,6 +283,7 @@ func main() {
 	oneHourIsInSeconds, _ := strconv.Atoi(lastStringReader)
 
 	gClock = clock{secondsAreOneHour: oneHourIsInSeconds}
+	dualClock = dualTimeClock{secondsAreOneHour: oneHourIsInSeconds}
 
 	if gClock.secondsAreOneHour > 60 {
 		fmt.Println("Warning simulation may be slow..")
@@ -302,10 +349,10 @@ func main() {
 		}
 		//// number of customers
 		numberOfCustomers := readFromConsole(
-			"[Store "+strconv.Itoa(iStore)+"] How many customers do you want to generate? Range response [100-200] "+
-				"means from 100 to 200 customers a day.",
+			"[Store "+strconv.Itoa(iStore)+"] How many customers do you want to generate? Range response [300-500] "+
+				"means from 300 to 500 customers a day.",
 			true,
-			"100-200",
+			"300-500",
 			useDefaultSettings)
 		//// number of products
 		numberOfProducts := readFromConsole(
@@ -462,6 +509,21 @@ func main() {
 			customers:          customers,
 		}
 	}
+	dualClock.initRealWorldStartTime()
+	fmt.Println("START Sanity Check of Dual Clock")
+	dualClock.initSimWorldDayClock(8)
+	realWorldStartTimeTempString := time.Now()
+	realWorldStartTimeTempSeconds := time.Now().Unix()
+	simWorldStartTimeTempInt, simWorldStartTimeTempString := dualClock.getSimWorldCurrentTime()
+	fmt.Printf("Realworld start time is %s.\n", realWorldStartTimeTempString)
+	fmt.Printf("Simworld start time is %s.\n", simWorldStartTimeTempString)
+	fmt.Println("Sleep 10 seconds")
+	time.Sleep(10 * time.Second)
+	fmt.Printf("Realworld elapsed time is %d.\n", time.Now().Unix()-realWorldStartTimeTempSeconds)
+	simWorldCurrentTimeInt, simWorldCurrentTimeString := dualClock.getSimWorldCurrentTime()
+	fmt.Printf("Simworld elapsed time is %d.\n", simWorldCurrentTimeInt-simWorldStartTimeTempInt)
+	fmt.Printf("Simworld current time is %s.\n", simWorldCurrentTimeString)
+	fmt.Println("END Sanity Check of Dual Clock")
 
 	for kStore, eStore := range stores {
 		fmt.Println(kStore)
