@@ -357,9 +357,9 @@ func main() {
 		//// number of products
 		numberOfProducts := readFromConsole(
 			"[Store "+strconv.Itoa(iStore)+"] How many products do you want to generate per customer? Range "+
-				"response [1-50] means from 1 to 50 customers a day.",
+				"response [1-150] means from 1 to 150 products per customer.",
 			true,
-			"1-50",
+			"1-150",
 			useDefaultSettings)
 		//// number of products
 		productProcessTime := readFromConsole(
@@ -450,8 +450,8 @@ func main() {
 			numberOfProductsTo, _ := strconv.Atoi(numberOfProductsParts[1])
 
 			var products = map[string]product{}
-
-			for iProduct := numberOfProductsFrom; iProduct <= numberOfProductsTo; iProduct++ {
+			numberOfProductsForCustomer := generateRandomNumber(numberOfProductsFrom, numberOfProductsTo)
+			for iProduct := 1; iProduct <= numberOfProductsForCustomer; iProduct++ {
 
 				productProcessTimeParts := strings.Split(productProcessTime, "-")
 				productProcessTimeFrom, _ := strconv.ParseFloat(productProcessTimeParts[0], 64)
