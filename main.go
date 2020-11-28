@@ -7,18 +7,21 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
 //TODO:
-// - Implement the busy hours.
-// - Implement weather
-// - Implement time of the day so that it can be printed what is the "Real time".
+// - Implement the busy hours. - Done
+// - Implement weather - Done
+// - Implement time of the day so that it can be printed what is the "Real time". - Done
 // - Implement all counters, as total items processed, etc.
 // - Make output as much information as possible
 // - Comment code more so that others can understand (only when the full code is finished)
 // - Implement customer giving up because of time
 // - Implement customer giving up because of current deep.
+// - Implement checkout director.
 
 type store struct {
 	storeId            int
@@ -28,7 +31,7 @@ type store struct {
 	openingHours       string
 	totalCustomers     int
 	customers          map[string]customer
-	processedCustomers int
+	processedCustomers atomicCounter
 	hasFloorManager    bool
 }
 
@@ -46,8 +49,8 @@ type checkout struct {
 	checkoutDesirability int
 	currentDeep          int
 	status               string
-	totalCustomersServed int
-	totalItemsCheckedOut int
+	totalCustomersServed atomicCounter
+	totalItemsCheckedOut atomicCounter
 }
 
 func (c checkout) scanProduct(product product) {
@@ -61,6 +64,7 @@ func (c checkout) scanProduct(product product) {
 	//	c.checkoutId,product.productId, product.processTimeSecond * 1.2)
 	gClock.scaleSleepTimeForSimulation(product.processTimeSecond * 1.2) // DOR Careful now - fix this magic number later
 	// Really we need to add more concurrency here for scanning/ bagging
+	c.totalItemsCheckedOut.inc()
 }
 
 type customer struct {
@@ -167,6 +171,18 @@ type product struct {
 	processTimeSecond float64
 }
 
+type atomicCounter int32
+
+func (c *atomicCounter) inc() int32 {
+	return atomic.AddInt32((*int32)(c), 1)
+}
+
+func (c *atomicCounter) get() int32 {
+	return atomic.LoadInt32((*int32)(c))
+}
+
+var totalCustomer atomicCounter
+
 func readFromConsole(label string, convertToUpper bool, defaultValue string, useDefaultSettings bool) string {
 
 	fmt.Print(label + "\n")
@@ -198,6 +214,14 @@ func generateRandomNumber(min int, max int) int {
 	return rand.Intn(max-min+1) + min
 }
 
+func getBusyFactor(store store) float64 {
+	_, currentTime := dualClock.getSimWorldCurrentTime()
+	//Example: 08 becomes 8
+	hour, _ := strconv.Atoi(currentTime[0:1])
+
+	return float64(store.busyRanges["busyRange_"+strconv.Itoa(hour)].busyOptionFactor.factor)
+}
+
 func openCheckout(store store, checkoutName string, checkout checkout) {
 	// DOR Careful now - fix this magic number later
 	paymentSeconds := 60
@@ -206,6 +230,10 @@ func openCheckout(store store, checkoutName string, checkout checkout) {
 	for {
 		queueIndex := getQueueIndex(store, checkout)
 		customer := <-queues[queueIndex]
+
+		//Increase counter.
+		store.processedCustomers.inc()
+
 		_, simWorldCurrentTimeString := dualClock.getSimWorldCurrentTime()
 		fmt.Printf("%s:Customer %4d arrived at Checkout %2d with %3d items\n",
 			simWorldCurrentTimeString, customer.customerId, checkout.checkoutId, customer.items)
@@ -220,6 +248,8 @@ func openCheckout(store store, checkoutName string, checkout checkout) {
 		_, simWorldCurrentTimeString = dualClock.getSimWorldCurrentTime()
 		fmt.Printf("%s:Customer %4d is finished at Checkout %2d.\n",
 			simWorldCurrentTimeString, customer.customerId, checkout.checkoutId)
+
+		checkout.totalCustomersServed.inc()
 	}
 
 }
@@ -233,6 +263,10 @@ func customerSpawning(eStore store) {
 	i := 0
 
 	for _, eCustomer := range eStore.customers {
+		//People will arrive every 5 minutes normally.
+		invertedFactor := getBusyFactor(eStore) - 2
+		gClock.scaleSleepTimeForSimulation(300 * invertedFactor)
+
 		rangeEnds := len(eStore.checkouts) - 1
 		queueIndex := getQueueIndex(eStore, eStore.checkouts["checkout"+strconv.Itoa(generateRandomNumber(1, rangeEnds))])
 		if eStore.hasFloorManager {
@@ -248,6 +282,7 @@ func customerSpawning(eStore store) {
 		for _, eCheckout := range eStore.checkouts {
 			queueIndex := getQueueIndex(eStore, eCheckout)
 			close(queues[queueIndex])
+			//wg.Done()
 		}
 	}
 
@@ -257,6 +292,8 @@ func customerSpawning(eStore store) {
 func getQueueIndex(eStore store, eCheckout checkout) string {
 	return "store_" + strconv.Itoa(eStore.storeId) + "_checkout_" + strconv.Itoa(eCheckout.checkoutId)
 }
+
+var wg sync.WaitGroup
 
 func main() {
 
@@ -432,8 +469,6 @@ func main() {
 				checkoutDesirability: checkoutDesirability,
 				currentDeep:          0,
 				status:               "IDLE",
-				totalCustomersServed: 0,
-				totalItemsCheckedOut: 0,
 			}
 		}
 
@@ -442,6 +477,9 @@ func main() {
 		numberOfCustomersTo, _ := strconv.Atoi(numberOfCustomersParts[1])
 
 		var customers = map[string]customer{}
+
+		//Apply weather conditions:
+		numberOfCustomersTo = int(float32(numberOfCustomersTo) * weather.factor)
 
 		for iCustomer := numberOfCustomersFrom; iCustomer <= numberOfCustomersTo; iCustomer++ {
 
@@ -498,15 +536,14 @@ func main() {
 		}
 
 		stores["store"+strconv.Itoa(iStore)] = store{
-			storeId:            iStore,
-			checkouts:          checkouts,
-			busyRanges:         busyRanges,
-			weather:            weather,
-			openingHours:       openingHours,
-			totalCustomers:     generateRandomNumber(numberOfCustomersFrom, numberOfCustomersTo),
-			processedCustomers: 0,
-			hasFloorManager:    isFloorManager,
-			customers:          customers,
+			storeId:         iStore,
+			checkouts:       checkouts,
+			busyRanges:      busyRanges,
+			weather:         weather,
+			openingHours:    openingHours,
+			totalCustomers:  generateRandomNumber(numberOfCustomersFrom, numberOfCustomersTo),
+			hasFloorManager: isFloorManager,
+			customers:       customers,
 		}
 	}
 	dualClock.initRealWorldStartTime()
@@ -532,11 +569,22 @@ func main() {
 			fmt.Println(kCheckout)
 			index := getQueueIndex(eStore, eCheckout)
 			queues[index] = make(chan customer)
+			//wg.Add(1)
 			go openCheckout(eStore, kCheckout, eCheckout)
 		}
 
 		customerSpawning(eStore)
 	}
 
+	//wg.Wait()
+	fmt.Println(totalCustomer)
+	for kStore, eStore := range stores {
+		fmt.Println("---------------- Store: " + kStore + ", Customer processed: " + strconv.Itoa(int(eStore.processedCustomers.get())))
+
+		for kCheckout, eCheckout := range eStore.checkouts {
+			fmt.Println("-------------------- Checkout: " + kCheckout + ", Customers processed: " + strconv.Itoa(int(eCheckout.totalCustomersServed.get())))
+			fmt.Println("-------------------- Checkout: " + kCheckout + ", Products processed: " + strconv.Itoa(int(eCheckout.totalItemsCheckedOut.get())))
+		}
+	}
 	//<-done
 }
