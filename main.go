@@ -20,7 +20,7 @@ import (
 // - Comment code more so that others can understand (only when the full code is finished)
 // - Implement customer giving up because of time
 // - Implement customer giving up because of current deep.
-// - Implement checkout director.
+// - Implement floor manager. - Done
 
 type store struct {
 	storeId            int
@@ -46,7 +46,7 @@ type checkout struct {
 	maxItems             int
 	paymentTime          int
 	checkoutDesirability int
-	currentDeep          int
+	currentDeep          SafeCounter
 	status               string
 	totalCustomersServed SafeCounter
 	totalItemsCheckedOut SafeCounter
@@ -55,9 +55,9 @@ type checkout struct {
 func (c checkout) scanProduct(customer customer, product product) {
 	// Scan according to product scan time and cashier efficiency
 	// Bag according to scan time scaled by an average customer bagging factor
-	_, simWorldCurrentTimeString := dualClock.getSimWorldCurrentTime()
-	fmt.Printf("%s:Checkout%2d: SCANNING -> Customer: %3d, Product: %4d | SimScanTime;%5.2f;\n",
-		simWorldCurrentTimeString, c.checkoutId, customer.customerId, product.productId, product.processTimeSecond*c.cashierEfficiency)
+	//_, simWorldCurrentTimeString := dualClock.getSimWorldCurrentTime()
+	//fmt.Printf("%s:Checkout%2d: SCANNING -> Customer: %3d, Product: %4d | SimScanTime;%5.2f;\n",
+	//	simWorldCurrentTimeString, c.checkoutId, customer.customerId, product.productId, product.processTimeSecond*c.cashierEfficiency)
 	gClock.scaleSleepTimeForSimulation(product.processTimeSecond * c.cashierEfficiency)
 	//fmt.Printf("Checkout%2d;BAGGING ;Prod.id;%3d;SimBagTime;%3.2f;\n",
 	//	c.checkoutId,product.productId, product.processTimeSecond * 1.2)
@@ -184,6 +184,14 @@ func (c *SafeCounter) Inc(key string) {
 	c.mu.Unlock()
 }
 
+// Dec increments the counter for the given key.
+func (c *SafeCounter) Dec(key string) {
+	c.mu.Lock()
+	// Lock so only one goroutine at a time can access the map c.v.
+	c.v[key]--
+	c.mu.Unlock()
+}
+
 // Value returns the current value of the counter for the given key.
 func (c *SafeCounter) Value(key string) int {
 	c.mu.Lock()
@@ -260,6 +268,7 @@ func openCheckout(store store, checkoutName string, checkout checkout) {
 
 		c.Inc("totalCustomersServed")
 		checkout.totalCustomersServed.Inc("counter")
+		checkout.currentDeep.Dec("counter")
 		ch <- 1
 	}
 
@@ -270,6 +279,28 @@ var queues = make(map[string]chan customer)
 var gClock clock
 var dualClock dualTimeClock
 
+func getCheckoutWithShorterQueue(store store) checkout {
+
+	lowestDeep := -1
+	var selectedCheckout checkout
+
+	for _, eCheckout := range store.checkouts {
+
+		if lowestDeep < 0 {
+			lowestDeep = eCheckout.currentDeep.Value("counter")
+			selectedCheckout = eCheckout
+		}
+
+		if eCheckout.currentDeep.Value("counter") < lowestDeep {
+			lowestDeep = eCheckout.currentDeep.Value("counter")
+			selectedCheckout = eCheckout
+		}
+
+	}
+
+	return selectedCheckout
+}
+
 func customerSpawning(eStore store) {
 
 	i := 0
@@ -279,28 +310,22 @@ func customerSpawning(eStore store) {
 		invertedFactor := getBusyFactor(eStore) - 2
 		gClock.scaleSleepTimeForSimulation(300 * invertedFactor)
 
-		rangeEnds := len(eStore.checkouts) - 1
-		queueIndex := getQueueIndex(eStore, eStore.checkouts["checkout"+strconv.Itoa(generateRandomNumber(1, rangeEnds))])
+		var checkout checkout
 		if eStore.hasFloorManager {
-			queues[queueIndex] <- eCustomer
+			checkout = getCheckoutWithShorterQueue(eStore)
 		} else {
-			queues[queueIndex] <- eCustomer
+			//Intentionally smaller so that there is a clear effect when there is no Floor Manager
+			rangeEnds := len(eStore.checkouts) - 1
+			checkout = eStore.checkouts["checkout"+strconv.Itoa(generateRandomNumber(1, rangeEnds))]
 		}
+
+		checkout.currentDeep.Inc("counter")
+		queueIndex := getQueueIndex(eStore, checkout)
+
+		fmt.Println("Queue: " + queueIndex + " has length: " + strconv.Itoa(checkout.currentDeep.Value("counter")))
+		queues[queueIndex] <- eCustomer
 		i++
 	}
-
-	//// Close queues after finishing.
-	//if len(eStore.customers)-1 == i {
-	//	for _, eCheckout := range eStore.checkouts {
-	//		queueIndex := getQueueIndex(eStore, eCheckout)
-	//		//fmt.Println(queueIndex)
-	//		close(queues[queueIndex])
-	//		ch <- true
-	//		//wg.Done()
-	//	}
-	//}
-
-	//done <- true
 }
 
 func getQueueIndex(eStore store, eCheckout checkout) string {
@@ -404,7 +429,7 @@ func main() {
 			"[Store "+strconv.Itoa(iStore)+"] How many customers do you want to generate? Range response [300-500] "+
 				"means from 300 to 500 customers a day.",
 			true,
-			"1-10",
+			"500-1000",
 			useDefaultSettings)
 		//// number of products
 		numberOfProducts := readFromConsole(
@@ -435,7 +460,7 @@ func main() {
 				"Range response in customer numbers [10-15] means from 10 to 15 customers in queue will make a customer "+
 				"to give up.",
 			true,
-			"10-15",
+			"100-150",
 			useDefaultSettings)
 
 		//// number of checkouts
@@ -482,7 +507,7 @@ func main() {
 				cashierEfficiency:    cashierEfficiency,
 				maxItems:             maxItems,
 				checkoutDesirability: checkoutDesirability,
-				currentDeep:          0,
+				currentDeep:          SafeCounter{v: make(map[string]int)},
 				status:               "IDLE",
 				totalItemsCheckedOut: SafeCounter{v: make(map[string]int)},
 				totalCustomersServed: SafeCounter{v: make(map[string]int)},
@@ -618,11 +643,12 @@ func main() {
 	}
 
 	for kStore, eStore := range stores {
-		fmt.Println("---------------- Store: " + kStore + ", Customer processed: " + strconv.Itoa(int(eStore.processedCustomers.Value("counter"))))
+		fmt.Println("---Store: " + kStore + ", Customer processed: " + strconv.Itoa(int(eStore.processedCustomers.Value("counter"))))
 
 		for kCheckout, eCheckout := range eStore.checkouts {
-			fmt.Println("-------------------- Checkout: " + kCheckout + ", Customers processed: " + strconv.Itoa(int(eCheckout.totalCustomersServed.Value("counter"))))
-			fmt.Println("-------------------- Checkout: " + kCheckout + ", Products processed: " + strconv.Itoa(int(eCheckout.totalItemsCheckedOut.Value("counter"))))
+			fmt.Println("---Checkout: " + kCheckout + ", Customers processed: " + strconv.Itoa(
+				int(eCheckout.totalCustomersServed.Value("counter"))) + ", Products processed: " + strconv.Itoa(
+				int(eCheckout.totalItemsCheckedOut.Value("counter"))))
 		}
 	}
 	//<-done
