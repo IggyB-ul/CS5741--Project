@@ -12,15 +12,8 @@ import (
 )
 
 //TODO:
-// - Implement the busy hours. - Done
-// - Implement weather - Done
-// - Implement time of the day so that it can be printed what is the "Real time". - Done
-// - Implement all counters, as total items processed, etc.
 // - Make output as much information as possible
 // - Comment code more so that others can understand (only when the full code is finished)
-// - Implement customer giving up because of time
-// - Implement customer giving up because of current deep.
-// - Implement floor manager. - Done
 
 type store struct {
 	storeId                          int
