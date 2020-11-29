@@ -55,9 +55,9 @@ type checkout struct {
 func (c checkout) scanProduct(customer customer, product product) {
 	// Scan according to product scan time and cashier efficiency
 	// Bag according to scan time scaled by an average customer bagging factor
-	//_, simWorldCurrentTimeString := dualClock.getSimWorldCurrentTime()
-	//fmt.Printf("%s:Checkout%2d: SCANNING -> Customer: %3d, Product: %4d | SimScanTime;%5.2f;\n",
-	//	simWorldCurrentTimeString, c.checkoutId, customer.customerId, product.productId, product.processTimeSecond*c.cashierEfficiency)
+	_, simWorldCurrentTimeString := dualClock.getSimWorldCurrentTime()
+	fmt.Printf("%s:Checkout%2d: SCANNING -> Customer: %3d, Product: %4d | SimScanTime;%5.2f;\n",
+		simWorldCurrentTimeString, c.checkoutId, customer.customerId, product.productId, product.processTimeSecond*c.cashierEfficiency)
 	gClock.scaleSleepTimeForSimulation(product.processTimeSecond * c.cashierEfficiency)
 	//fmt.Printf("Checkout%2d;BAGGING ;Prod.id;%3d;SimBagTime;%3.2f;\n",
 	//	c.checkoutId,product.productId, product.processTimeSecond * 1.2)
