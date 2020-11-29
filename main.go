@@ -23,15 +23,17 @@ import (
 // - Implement floor manager. - Done
 
 type store struct {
-	storeId            int
-	checkouts          map[string]checkout
-	busyRanges         map[string]busyRange
-	weather            optionFactor
-	openingHours       string
-	totalCustomers     int
-	customers          map[string]customer
-	processedCustomers SafeCounter
-	hasFloorManager    bool
+	storeId                          int
+	checkouts                        map[string]*checkout
+	busyRanges                       map[string]busyRange
+	weather                          optionFactor
+	openingHours                     string
+	totalCustomers                   int
+	customers                        map[string]*customer
+	processedCustomers               SafeCounter
+	notProcessedCustomersQueuingTime SafeCounter
+	notProcessedCustomersQueuingDeep SafeCounter
+	hasFloorManager                  bool
 }
 
 type busyRange struct {
@@ -52,7 +54,7 @@ type checkout struct {
 	totalItemsCheckedOut SafeCounter
 }
 
-func (c checkout) scanProduct(customer customer, product product) {
+func (c *checkout) scanProduct(customer *customer, product *product) {
 	// Scan according to product scan time and cashier efficiency
 	// Bag according to scan time scaled by an average customer bagging factor
 	_, simWorldCurrentTimeString := dualClock.getSimWorldCurrentTime()
@@ -63,19 +65,23 @@ func (c checkout) scanProduct(customer customer, product product) {
 	//	c.checkoutId,product.productId, product.processTimeSecond * 1.2)
 	gClock.scaleSleepTimeForSimulation(product.processTimeSecond * 1.2) // DOR Careful now - fix this magic number later
 	// Really we need to add more concurrency here for scanning/ bagging
-	c.totalItemsCheckedOut.Inc("counter")
+	c.totalItemsCheckedOut.Inc()
 }
 
 type customer struct {
 	customerId          int
 	items               int
 	checkoutId          int
-	queueTimeSeconds    int
-	maxQueueTimeSeconds int
+	queueTimeStart      int64
+	queueTimeEnd        int64
+	queueTimeSeconds    int64
+	maxQueueTimeSeconds int64
 	maxQueueCustomers   int
 	purchaseComplete    bool
 	leftQueue           bool
-	checkoutTime        float32
+	checkoutTime        int64
+	checkoutTimeStart   int64
+	checkoutTimeEnd     int64
 	products            map[string]product
 }
 
@@ -148,6 +154,11 @@ func (dtc *dualTimeClock) getSimWorldCurrentTime() (int64, string) {
 	return secondsSinceStoreEpoch, humanReadableTimeString
 }
 
+func (dtc *dualTimeClock) diffInSeconds(start int64, end int64) int64 {
+	realWorldMicroSecondsElapsed := end - start
+	return realWorldMicroSecondsElapsed
+}
+
 type optionFactor struct {
 	name   string
 	factor float32
@@ -173,31 +184,31 @@ type product struct {
 // SafeCounter is safe to use concurrently.
 type SafeCounter struct {
 	mu sync.Mutex
-	v  map[string]int
+	v  int
 }
 
 // Inc increments the counter for the given key.
-func (c *SafeCounter) Inc(key string) {
+func (c *SafeCounter) Inc() {
 	c.mu.Lock()
 	// Lock so only one goroutine at a time can access the map c.v.
-	c.v[key]++
+	c.v = c.v + 1
 	c.mu.Unlock()
 }
 
 // Dec increments the counter for the given key.
-func (c *SafeCounter) Dec(key string) {
+func (c *SafeCounter) Dec() {
 	c.mu.Lock()
 	// Lock so only one goroutine at a time can access the map c.v.
-	c.v[key]--
+	c.v = c.v - 1
 	c.mu.Unlock()
 }
 
 // Value returns the current value of the counter for the given key.
-func (c *SafeCounter) Value(key string) int {
+func (c *SafeCounter) Value() int {
 	c.mu.Lock()
 	// Lock so only one goroutine at a time can access the map c.v.
 	defer c.mu.Unlock()
-	return c.v[key]
+	return c.v
 }
 
 func readFromConsole(label string, convertToUpper bool, defaultValue string, useDefaultSettings bool) string {
@@ -231,104 +242,150 @@ func generateRandomNumber(min int, max int) int {
 	return rand.Intn(max-min+1) + min
 }
 
-func getBusyFactor(store store) float64 {
+func getBusyFactor(store *store) float64 {
 	_, currentTime := dualClock.getSimWorldCurrentTime()
 	//Example: 08 becomes 8
-	hour, _ := strconv.Atoi(currentTime[0:1])
+	hour, _ := strconv.Atoi(currentTime[0:2])
 
 	return float64(store.busyRanges["busyRange_"+strconv.Itoa(hour)].busyOptionFactor.factor)
 }
 
-func openCheckout(store store, checkoutName string, checkout checkout) {
-	// DOR Careful now - fix this magic number later
-	paymentSeconds := 60
+func openCheckout(store *store, checkoutName string, checkout *checkout) {
 	fmt.Println("Opening: " + checkoutName)
 
 	for {
+		//Time between one payment and next person
+		gClock.scaleSleepTimeForSimulation(float64(30))
 		queueIndex := getQueueIndex(store, checkout)
 		customer := <-queues[queueIndex]
+		customer.queueTimeEnd, _ = dualClock.getSimWorldCurrentTime()
 
-		//Increase counter.
-		store.processedCustomers.Inc("counter")
+		if customer.queueTimeStart != customer.queueTimeEnd {
+			customer.queueTimeSeconds = dualClock.diffInSeconds(customer.queueTimeStart, customer.queueTimeEnd)
+		}
 
+		if customer.queueTimeSeconds > customer.maxQueueTimeSeconds {
+			customer.leftQueue = true
+			store.notProcessedCustomersQueuingTime.Inc()
+			continue
+		}
+
+		if checkout.currentDeep.Value() > customer.maxQueueCustomers {
+			customer.leftQueue = true
+			store.notProcessedCustomersQueuingDeep.Inc()
+			continue
+		}
+
+		customer.checkoutId = checkout.checkoutId
+		customer.checkoutTimeStart, _ = dualClock.getSimWorldCurrentTime()
+		checkout.status = "BUSY"
 		_, simWorldCurrentTimeString := dualClock.getSimWorldCurrentTime()
 		fmt.Printf("%s:Customer %4d arrived at Checkout %2d with %3d items\n",
 			simWorldCurrentTimeString, customer.customerId, checkout.checkoutId, customer.items)
-		//fmt.Println("Customer " + strconv.Itoa(customer.customerId) + ", Arrived at checkout: " + strconv.Itoa(checkout.checkoutId))
+		fmt.Println("Customer " + strconv.Itoa(customer.customerId) + ", Arrived at checkout: " + strconv.Itoa(checkout.checkoutId))
 		for _, eProduct := range customer.products {
-			checkout.scanProduct(customer, eProduct)
+			checkout.scanProduct(customer, &eProduct)
 		}
 		_, simWorldCurrentTimeString = dualClock.getSimWorldCurrentTime()
 		fmt.Printf("%s:Customer %4d is paying at Checkout %2d...\n",
 			simWorldCurrentTimeString, customer.customerId, checkout.checkoutId)
-		gClock.scaleSleepTimeForSimulation(float64(paymentSeconds))
+		gClock.scaleSleepTimeForSimulation(float64(checkout.paymentTime))
 		_, simWorldCurrentTimeString = dualClock.getSimWorldCurrentTime()
 		fmt.Printf("%s:Customer %4d is finished at Checkout %2d.\n",
 			simWorldCurrentTimeString, customer.customerId, checkout.checkoutId)
 
-		c.Inc("totalCustomersServed")
-		checkout.totalCustomersServed.Inc("counter")
-		checkout.currentDeep.Dec("counter")
+		customer.purchaseComplete = true
+		checkout.status = "IDLE"
+		checkout.totalCustomersServed.Inc()
+		checkout.currentDeep.Dec()
+		store.processedCustomers.Inc()
+		customer.checkoutTimeEnd, _ = dualClock.getSimWorldCurrentTime()
+		customer.checkoutTime = dualClock.diffInSeconds(customer.checkoutTimeStart, customer.checkoutTimeEnd)
+		c.Inc()
 		ch <- 1
 	}
 
 }
 
-var c = SafeCounter{v: make(map[string]int)}
-var queues = make(map[string]chan customer)
+var c = SafeCounter{v: 0}
+var queues = make(map[string]chan *customer)
 var gClock clock
 var dualClock dualTimeClock
 
-func getCheckoutWithShorterQueue(store store) checkout {
+func getCheckoutWithShorterQueue(store *store, nextCustomerNumberOfProducts int) *checkout {
 
 	lowestDeep := -1
-	var selectedCheckout checkout
+	var selectedCheckout string
 
-	for _, eCheckout := range store.checkouts {
+	for kCheckout := range store.checkouts {
+		tmpCheckout := store.checkouts[kCheckout]
 
-		if lowestDeep < 0 {
-			lowestDeep = eCheckout.currentDeep.Value("counter")
-			selectedCheckout = eCheckout
+		if lowestDeep < 0 && (nextCustomerNumberOfProducts <= tmpCheckout.maxItems || tmpCheckout.maxItems == 0) {
+			lowestDeep = tmpCheckout.currentDeep.Value()
+			selectedCheckout = kCheckout
 		}
 
-		if eCheckout.currentDeep.Value("counter") < lowestDeep {
-			lowestDeep = eCheckout.currentDeep.Value("counter")
-			selectedCheckout = eCheckout
+		if tmpCheckout.currentDeep.Value() < lowestDeep && (nextCustomerNumberOfProducts <= tmpCheckout.maxItems || tmpCheckout.maxItems == 0) {
+			lowestDeep = tmpCheckout.currentDeep.Value()
+			selectedCheckout = kCheckout
 		}
 
 	}
 
-	return selectedCheckout
+	return store.checkouts[selectedCheckout]
 }
 
-func customerSpawning(eStore store) {
+func getCheckoutRandomly(store *store, nextCustomerNumberOfProducts int) *checkout {
+
+	tmpCheckouts := make(map[int]string)
 
 	i := 0
 
-	for _, eCustomer := range eStore.customers {
+	for kCheckout := range store.checkouts {
+		tmpCheckout := store.checkouts[kCheckout]
+
+		if nextCustomerNumberOfProducts <= tmpCheckout.maxItems || tmpCheckout.maxItems == 0 {
+			tmpCheckouts[i] = kCheckout
+		}
+	}
+
+	rangeEnds := len(tmpCheckouts)
+
+	return store.checkouts[tmpCheckouts[generateRandomNumber(1, rangeEnds)]]
+}
+
+func customerSpawning(eStore *store) {
+
+	i := 0
+
+	for kCustomer := range eStore.customers {
 		//People will arrive every 5 minutes normally.
 		invertedFactor := getBusyFactor(eStore) - 2
+		if invertedFactor < 0 {
+			invertedFactor = 1
+		}
 		gClock.scaleSleepTimeForSimulation(300 * invertedFactor)
 
-		var checkout checkout
+		nextCustomerNumberOfProducts := len(eStore.customers[kCustomer].products)
+
+		var checkout *checkout
 		if eStore.hasFloorManager {
-			checkout = getCheckoutWithShorterQueue(eStore)
+			checkout = getCheckoutWithShorterQueue(eStore, nextCustomerNumberOfProducts)
 		} else {
-			//Intentionally smaller so that there is a clear effect when there is no Floor Manager
-			rangeEnds := len(eStore.checkouts) - 1
-			checkout = eStore.checkouts["checkout"+strconv.Itoa(generateRandomNumber(1, rangeEnds))]
+			checkout = getCheckoutRandomly(eStore, nextCustomerNumberOfProducts)
 		}
 
-		checkout.currentDeep.Inc("counter")
+		checkout.currentDeep.Inc()
 		queueIndex := getQueueIndex(eStore, checkout)
 
-		fmt.Println("Queue: " + queueIndex + " has length: " + strconv.Itoa(checkout.currentDeep.Value("counter")))
-		queues[queueIndex] <- eCustomer
+		fmt.Println("Queue: " + queueIndex + " has length: " + strconv.Itoa(checkout.currentDeep.Value()))
+		eStore.customers[kCustomer].queueTimeStart, _ = dualClock.getSimWorldCurrentTime()
+		queues[queueIndex] <- eStore.customers[kCustomer]
 		i++
 	}
 }
 
-func getQueueIndex(eStore store, eCheckout checkout) string {
+func getQueueIndex(eStore *store, eCheckout *checkout) string {
 	return "store_" + strconv.Itoa(eStore.storeId) + "_checkout_" + strconv.Itoa(eCheckout.checkoutId)
 }
 
@@ -338,7 +395,7 @@ var ch chan int
 func main() {
 
 	var lastStringReader string
-	var stores = map[string]store{}
+	var stores = map[string]*store{}
 	rand.Seed(time.Now().UnixNano())
 	lastStringReader = readFromConsole(
 		"Do you want to use all defaults settings? [Y/n]:",
@@ -472,7 +529,7 @@ func main() {
 
 		numberOfCheckouts, _ := strconv.Atoi(lastStringReader)
 
-		var checkouts = map[string]checkout{}
+		var checkouts = map[string]*checkout{}
 
 		//// Define settings by each checkout
 		for iCheckout := 1; iCheckout <= numberOfCheckouts; iCheckout++ {
@@ -502,15 +559,16 @@ func main() {
 
 			checkoutDesirability, _ := strconv.Atoi(lastStringReader)
 
-			checkouts["checkout"+strconv.Itoa(iCheckout)] = checkout{
+			checkouts["checkout"+strconv.Itoa(iCheckout)] = &checkout{
 				checkoutId:           iCheckout,
 				cashierEfficiency:    cashierEfficiency,
+				paymentTime:          60,
 				maxItems:             maxItems,
 				checkoutDesirability: checkoutDesirability,
-				currentDeep:          SafeCounter{v: make(map[string]int)},
+				currentDeep:          SafeCounter{v: 0},
 				status:               "IDLE",
-				totalItemsCheckedOut: SafeCounter{v: make(map[string]int)},
-				totalCustomersServed: SafeCounter{v: make(map[string]int)},
+				totalItemsCheckedOut: SafeCounter{v: 0},
+				totalCustomersServed: SafeCounter{v: 0},
 			}
 		}
 
@@ -518,12 +576,12 @@ func main() {
 		numberOfCustomersFrom, _ := strconv.Atoi(numberOfCustomersParts[0])
 		numberOfCustomersTo, _ := strconv.Atoi(numberOfCustomersParts[1])
 
-		var customers = map[string]customer{}
+		var customers = map[string]*customer{}
 
 		//Apply weather conditions:
 		numberOfCustomersTo = int(float32(numberOfCustomersTo) * weather.factor)
 
-		for iCustomer := numberOfCustomersFrom; iCustomer <= numberOfCustomersTo; iCustomer++ {
+		for iCustomer := numberOfCustomersFrom; iCustomer < numberOfCustomersTo; iCustomer++ {
 
 			numberOfProductsParts := strings.Split(numberOfProducts, "-")
 			numberOfProductsFrom, _ := strconv.Atoi(numberOfProductsParts[0])
@@ -551,19 +609,19 @@ func main() {
 				}
 			}
 
-			var maxQueueTimeSeconds int
+			var maxQueueTimeSeconds int64
 
 			maxQueueTimeParts := strings.Split(maxQueueTime, "-")
 			maxQueueTimeFrom, _ := strconv.Atoi(maxQueueTimeParts[0])
 			maxQueueTimeTo, _ := strconv.Atoi(maxQueueTimeParts[1])
 
-			maxQueueTimeSeconds = generateRandomNumber(maxQueueTimeFrom, maxQueueTimeTo) * 60
+			maxQueueTimeSeconds = int64(generateRandomNumber(maxQueueTimeFrom, maxQueueTimeTo) * 60)
 
 			maxQueueCustomersParts := strings.Split(maxQueueCustomers, "-")
 			maxQueueCustomersFrom, _ := strconv.Atoi(maxQueueCustomersParts[0])
 			maxQueueCustomersTo, _ := strconv.Atoi(maxQueueCustomersParts[1])
 
-			customers["customer"+strconv.Itoa(iCustomer)] = customer{
+			customers["customer"+strconv.Itoa(iCustomer)] = &customer{
 				customerId:          iCustomer,
 				items:               len(products),
 				checkoutId:          0,
@@ -577,7 +635,7 @@ func main() {
 			}
 		}
 
-		stores["store"+strconv.Itoa(iStore)] = store{
+		stores["store"+strconv.Itoa(iStore)] = &store{
 			storeId:            iStore,
 			checkouts:          checkouts,
 			busyRanges:         busyRanges,
@@ -586,7 +644,7 @@ func main() {
 			totalCustomers:     generateRandomNumber(numberOfCustomersFrom, numberOfCustomersTo),
 			hasFloorManager:    isFloorManager,
 			customers:          customers,
-			processedCustomers: SafeCounter{v: make(map[string]int)},
+			processedCustomers: SafeCounter{v: 0},
 		}
 	}
 	dualClock.initRealWorldStartTime()
@@ -615,8 +673,8 @@ func main() {
 		allCustomerToBeProcessed = allCustomerToBeProcessed + len(eStore.customers)
 		for kCheckout, eCheckout := range eStore.checkouts {
 			fmt.Println(kCheckout)
-			index := getQueueIndex(eStore, eCheckout)
-			queues[index] = make(chan customer)
+			index := getQueueIndex(stores[kStore], eCheckout)
+			queues[index] = make(chan *customer)
 			//wg.Add(1)
 			go openCheckout(eStore, kCheckout, eCheckout)
 			totalCheckouts++
@@ -627,28 +685,33 @@ func main() {
 	for _, eStore := range stores {
 		go customerSpawning(eStore)
 	}
-	allCustomerToBeProcessed = allCustomerToBeProcessed
 
-	totalProcessedCustomers := 0
+	totalProcessedCustomers := SafeCounter{v: 0}
 
 	for {
 		newCustomerProcessed := <-ch
 
-		totalProcessedCustomers = totalProcessedCustomers + newCustomerProcessed
+		if newCustomerProcessed > 0 {
+			totalProcessedCustomers.Inc()
+		}
 
-		if totalProcessedCustomers == allCustomerToBeProcessed {
+		if totalProcessedCustomers.Value() == allCustomerToBeProcessed {
 			close(ch)
 			break
 		}
 	}
 
-	for kStore, eStore := range stores {
-		fmt.Println("---Store: " + kStore + ", Customer processed: " + strconv.Itoa(int(eStore.processedCustomers.Value("counter"))))
+	for kStore := range stores {
+		eStore := stores[kStore]
 
-		for kCheckout, eCheckout := range eStore.checkouts {
+		fmt.Println("---Store: " + kStore + ", Customer processed: " + strconv.Itoa(eStore.processedCustomers.Value()))
+
+		for kCheckout := range eStore.checkouts {
+			out := eStore.checkouts[kCheckout]
+
 			fmt.Println("---Checkout: " + kCheckout + ", Customers processed: " + strconv.Itoa(
-				int(eCheckout.totalCustomersServed.Value("counter"))) + ", Products processed: " + strconv.Itoa(
-				int(eCheckout.totalItemsCheckedOut.Value("counter"))))
+				out.totalCustomersServed.Value()) + ", Products processed: " + strconv.Itoa(
+				out.totalItemsCheckedOut.Value()))
 		}
 	}
 	//<-done
