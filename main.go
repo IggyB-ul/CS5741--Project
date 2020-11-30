@@ -401,8 +401,8 @@ var defaultScenarios = map[string]string{}
 
 func main() {
 	// Scenario 1 Settings - Override predefined settings by scenario
-	defaultScenarios["SCENARIO1_[store1]numberOfCustomers"] = "100-200"
-	defaultScenarios["SCENARIO1_[store1]numberOfProducts"] = "1-80"
+	defaultScenarios["SCENARIO1_[store1]numberOfCustomers"] = "300-400"
+	defaultScenarios["SCENARIO1_[store1]numberOfProducts"] = "1-120"
 	defaultScenarios["SCENARIO1_[store1]openingHours"] = "9-22"
 	defaultScenarios["SCENARIO1_[store1]busyRange_9"] = "q"
 	defaultScenarios["SCENARIO1_[store1]busyRange_10"] = "lb"
@@ -423,8 +423,8 @@ func main() {
 	defaultScenarios["SCENARIO1_[store1][checkout3]maxItems"] = "0"
 	defaultScenarios["SCENARIO1_[store1][checkout4]maxItems"] = "5"
 	// Scenario 2 Settings - Override predefined settings by scenario
-	defaultScenarios["SCENARIO2_[store1]numberOfCustomers"] = "200-300"
-	defaultScenarios["SCENARIO2_[store1]numberOfProducts"] = "1-100"
+	defaultScenarios["SCENARIO2_[store1]numberOfCustomers"] = "300-400"
+	defaultScenarios["SCENARIO2_[store1]numberOfProducts"] = "1-120"
 	defaultScenarios["SCENARIO2_[store1]openingHours"] = "9-22"
 	defaultScenarios["SCENARIO2_[store1]busyRange_9"] = "q"
 	defaultScenarios["SCENARIO2_[store1]busyRange_10"] = "lb"
@@ -447,8 +447,8 @@ func main() {
 	defaultScenarios["SCENARIO2_[store1][checkout5]maxItems"] = "0"
 	defaultScenarios["SCENARIO2_[store1][checkout6]maxItems"] = "5"
 	// Scenario 3 Settings - Override predefined settings by scenario
-	defaultScenarios["SCENARIO3_[store1]numberOfCustomers"] = "350-450"
-	defaultScenarios["SCENARIO3_[store1]numberOfProducts"] = "1-150"
+	defaultScenarios["SCENARIO3_[store1]numberOfCustomers"] = "300-400"
+	defaultScenarios["SCENARIO3_[store1]numberOfProducts"] = "1-120"
 	defaultScenarios["SCENARIO3_[store1]openingHours"] = "9-22"
 	defaultScenarios["SCENARIO3_[store1]busyRange_9"] = "q"
 	defaultScenarios["SCENARIO3_[store1]busyRange_10"] = "q"
@@ -514,9 +514,9 @@ func main() {
 
 		//// Opening Hours
 		openingHours := readFromConsole(
-			"[Store "+strconv.Itoa(iStore)+"] Enter opening hours from-to, [8-20]:",
+			"[Store "+strconv.Itoa(iStore)+"] Enter opening hours from-to, [8-22]:",
 			true,
-			"8-20",
+			"8-22",
 			defaultSettingsCode,
 			"[store"+strconv.Itoa(iStore)+"]openingHours")
 		//// busy ranges, ask based on opening times.
@@ -573,9 +573,9 @@ func main() {
 		//// number of products
 		numberOfProducts := readFromConsole(
 			"[Store "+strconv.Itoa(iStore)+"] How many products do you want to generate per customer? Range "+
-				"response [1-150] means from 1 to 150 products per customer.",
+				"response [1-100] means from 1 to 100 products per customer.",
 			true,
-			"1-150",
+			"1-100",
 			defaultSettingsCode,
 			"[store"+strconv.Itoa(iStore)+"]numberOfProducts")
 		//// number of products
