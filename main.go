@@ -400,7 +400,7 @@ var defaultScenarios = map[string]string{}
 func main() {
 	// Scenario 1 Settings - Override predefined settings by scenario
 	defaultScenarios["SCENARIO1_[store1]numberOfCustomers"] = "400-500"
-	defaultScenarios["SCENARIO1_[store1]numberOfProducts"] = "1-20"
+	defaultScenarios["SCENARIO1_[store1]numberOfProducts"] = "1-80"
 	defaultScenarios["SCENARIO1_[store1]openingHours"] = "9-22"
 	defaultScenarios["SCENARIO1_[store1]busyRange_9"] = "q"
 	defaultScenarios["SCENARIO1_[store1]busyRange_10"] = "lb"
@@ -422,7 +422,7 @@ func main() {
 	defaultScenarios["SCENARIO1_[store1][checkout4]maxItems"] = "5"
 	// Scenario 2 Settings - Override predefined settings by scenario
 	defaultScenarios["SCENARIO2_[store1]numberOfCustomers"] = "400-500"
-	defaultScenarios["SCENARIO1_[store1]numberOfProducts"] = "1-20"
+	defaultScenarios["SCENARIO2_[store1]numberOfProducts"] = "1-100"
 	defaultScenarios["SCENARIO2_[store1]openingHours"] = "9-22"
 	defaultScenarios["SCENARIO2_[store1]busyRange_9"] = "q"
 	defaultScenarios["SCENARIO2_[store1]busyRange_10"] = "lb"
@@ -446,7 +446,7 @@ func main() {
 	defaultScenarios["SCENARIO2_[store1][checkout6]maxItems"] = "5"
 	// Scenario 3 Settings - Override predefined settings by scenario
 	defaultScenarios["SCENARIO3_[store1]numberOfCustomers"] = "400-500"
-	defaultScenarios["SCENARIO1_[store1]numberOfProducts"] = "1-20"
+	defaultScenarios["SCENARIO3_[store1]numberOfProducts"] = "1-150"
 	defaultScenarios["SCENARIO3_[store1]openingHours"] = "9-22"
 	defaultScenarios["SCENARIO3_[store1]busyRange_9"] = "q"
 	defaultScenarios["SCENARIO3_[store1]busyRange_10"] = "q"
