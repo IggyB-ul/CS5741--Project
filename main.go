@@ -254,6 +254,8 @@ func openCheckout(store *store, checkoutName string, checkout *checkout) {
 	fmt.Println("Opening: " + checkoutName)
 
 	for {
+		//Time between one payment and next person
+		dualClock.scaleSleepTimeForSimulation(float64(30))
 		queueIndex := getQueueIndex(store, checkout)
 		customer := <-queues[queueIndex]
 		customer.queueTimeEnd, _ = dualClock.getSimWorldCurrentTime()
@@ -399,7 +401,7 @@ var defaultScenarios = map[string]string{}
 
 func main() {
 	// Scenario 1 Settings - Override predefined settings by scenario
-	defaultScenarios["SCENARIO1_[store1]numberOfCustomers"] = "400-500"
+	defaultScenarios["SCENARIO1_[store1]numberOfCustomers"] = "100-200"
 	defaultScenarios["SCENARIO1_[store1]numberOfProducts"] = "1-80"
 	defaultScenarios["SCENARIO1_[store1]openingHours"] = "9-22"
 	defaultScenarios["SCENARIO1_[store1]busyRange_9"] = "q"
@@ -421,7 +423,7 @@ func main() {
 	defaultScenarios["SCENARIO1_[store1][checkout3]maxItems"] = "0"
 	defaultScenarios["SCENARIO1_[store1][checkout4]maxItems"] = "5"
 	// Scenario 2 Settings - Override predefined settings by scenario
-	defaultScenarios["SCENARIO2_[store1]numberOfCustomers"] = "400-500"
+	defaultScenarios["SCENARIO2_[store1]numberOfCustomers"] = "200-300"
 	defaultScenarios["SCENARIO2_[store1]numberOfProducts"] = "1-100"
 	defaultScenarios["SCENARIO2_[store1]openingHours"] = "9-22"
 	defaultScenarios["SCENARIO2_[store1]busyRange_9"] = "q"
@@ -445,7 +447,7 @@ func main() {
 	defaultScenarios["SCENARIO2_[store1][checkout5]maxItems"] = "0"
 	defaultScenarios["SCENARIO2_[store1][checkout6]maxItems"] = "5"
 	// Scenario 3 Settings - Override predefined settings by scenario
-	defaultScenarios["SCENARIO3_[store1]numberOfCustomers"] = "400-500"
+	defaultScenarios["SCENARIO3_[store1]numberOfCustomers"] = "350-450"
 	defaultScenarios["SCENARIO3_[store1]numberOfProducts"] = "1-150"
 	defaultScenarios["SCENARIO3_[store1]openingHours"] = "9-22"
 	defaultScenarios["SCENARIO3_[store1]busyRange_9"] = "q"
@@ -562,10 +564,10 @@ func main() {
 		}
 		//// number of customers
 		numberOfCustomers := readFromConsole(
-			"[Store "+strconv.Itoa(iStore)+"] How many customers do you want to generate? Range response [300-500] "+
-				"means from 300 to 500 customers a day.",
+			"[Store "+strconv.Itoa(iStore)+"] How many customers do you want to generate? Range response [350-450] "+
+				"means from 350 to 450 customers a day.",
 			true,
-			"500-1000",
+			"350-450",
 			defaultSettingsCode,
 			"[store"+strconv.Itoa(iStore)+"]numberOfCustomers")
 		//// number of products
